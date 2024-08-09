@@ -1,0 +1,5 @@
+matplotlib==3.8.3
+numpy==2.0.1
+pandas==2.2.2
+tensorboardX==2.6.2.2
+torch==2.2.2+cu121
