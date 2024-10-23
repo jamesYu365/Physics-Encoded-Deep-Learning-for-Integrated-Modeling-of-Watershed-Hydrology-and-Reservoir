@@ -20,7 +20,7 @@ def data_preprocess(args):
         pd.DataFrame: Processed hydrodata with selected features.
     """
     # Read the CSV file
-    hydrodata = pd.read_csv(args.datapath + 'processed_ankang_inflow_release_meteo_1991_2014.csv', index_col=0)
+    hydrodata = pd.read_csv(args.datapath + 'processed_ankang_inflow_release_meteo_1991_2020.csv', index_col=0)
     hydrodata.index = pd.to_datetime(hydrodata.index)
     
     # Convert flow units from m³/s to mm/day
@@ -31,9 +31,12 @@ def data_preprocess(args):
     hydrodata['doy'] = hydrodata['doy'] / 365
     hydrodata['cosdoy'] = (np.cos(hydrodata['doy'] * 2 * np.pi) + 1) / 2
     hydrodata['doy'] = hydrodata['doy'] * 365
-    
+
+    # Calculate reservoir water surface evaporation rate using Hamon's Equation
+    hydrodata['res_eva_rate']=29.8*(hydrodata['dayl']*24)*0.611*np.exp(17.3*hydrodata['tmean_res']/(hydrodata['tmean_res']+273.15))/(hydrodata['tmean_res']+273.15)
+
     # Select relevant features
-    hydrodata = hydrodata[['prcp', 'tmean', 'doy', 'cosdoy', 'inflow', 'release']]
+    hydrodata = hydrodata[['prcp', 'tmean', 'doy', 'cosdoy','prcp_res','res_eva_rate', 'inflow', 'release']]
     
     return hydrodata
 
@@ -51,7 +54,7 @@ def traindata_watershed(args):
     hydrodata = data_preprocess(args)
     
     # Exclude release and doy for watershed LSTM
-    hydrodata = hydrodata.drop(['release', 'doy'], axis=1)
+    hydrodata = hydrodata.drop(['release', 'doy','prcp_res','res_eva_rate'], axis=1)
     
     # Define date ranges for train, validation, and test sets
     training_start = pd.to_datetime(args.training_start) - datetime.timedelta(days=args.wrap_inflow)

@@ -2,8 +2,10 @@
 
 import argparse
 import torch
+import pandas as pd
+import numpy as np
 
-from models import DL_Res_LSTM
+from models import P_LSTM_INT
 from preparedataset import traindata_reservoir, traindata_watershed
 from utils import set_seed
 from train_utils import run_exp
@@ -12,11 +14,12 @@ from train_utils import run_exp
 
 def setup_argparse():
     """Set up command-line argument parser with all necessary parameters."""
-    parser = argparse.ArgumentParser(description='DL-Res-LSTM model configuration')
+    parser = argparse.ArgumentParser(description='P-LSTM_INT model configuration')
     
     # File paths
     parser.add_argument("--datapath", type=str, default='../../data/', help="Data path")
     parser.add_argument("--exp", type=str, default='exp0/', help="Configuration result path")
+    parser.add_argument("--repeat", type=int, default=0, help="repeat number")
     
     # Data settings
     parser.add_argument("--training_start", type=str, default='1992-01-01', help="Training set start time")
@@ -30,7 +33,7 @@ def setup_argparse():
     parser.add_argument("--wrap_release", type=int, default=365*4, help="Time length for one batch size")
     
     # Model settings
-    parser.add_argument('--model_name', type=str, default='DL-Res(AK)', help='Model name')
+    parser.add_argument('--model_name', type=str, default='P-LSTM_INT(AK)', help='Model name')
     parser.add_argument('--jit', type=bool, default=True, help='Whether to use jit Reservoir LSTM')
     parser.add_argument('--input_size', type=int, default=5, help='Input channel size of watershed LSTM')
     parser.add_argument('--hidden_size', type=int, default=3, help='Hidden channel size of watershed LSTM')
@@ -40,15 +43,14 @@ def setup_argparse():
     parser.add_argument('--dropout', type=float, default=0.3, help='Dropout probability')
     
     # Training settings
-    parser.add_argument('--seed', type=int, default=42, help='Set environment seed')
     parser.add_argument('--cuda', type=bool, default=True, help='Whether to use CUDA')
     parser.add_argument('--cuda_device', type=int, default=0, help='CUDA device number')
     parser.add_argument('--spinup', type=int, default=365, help='Set warmup periods as one year')
-    parser.add_argument('--tot_evals', type=int, default=10, help='Number of repeat experiments')
+    parser.add_argument('--tot_evals', type=int, default=1, help='Number of repeat experiments')
     parser.add_argument('--batch_size_phy', type=int, default=5, help='Batch size')
     parser.add_argument('--patience', type=int, default=100, help='Early stop patience')
     parser.add_argument('--warmup_updates', type=int, default=10, help='Learning rate warmup updates')
-    parser.add_argument('--tot_updates', type=int, default=400, help='Total updates')
+    parser.add_argument('--tot_updates', type=int, default=10, help='Total updates')
     parser.add_argument('--peak_lr', type=float, default=1e-2, help='Peak learning rate')
     parser.add_argument('--end_lr', type=float, default=1e-3, help='End learning rate')
     parser.add_argument('--power', type=int, default=1, help='Learning rate decay power')
@@ -59,56 +61,58 @@ def setup_argparse():
 #%% Main execution
 
 def main():
-    """Main function to run the DL-Res-LSTM model."""
+    """Main function to run the P-LSTM_INT model."""
     
     # Parse command-line arguments
     args = setup_argparse()
     
     # Set random seed for reproducibility
-    set_seed(args.seed)
-    
+    set_seed(args.repeat)
     # Load and preprocess data
     train_x_phy, train_y_phy, val_x_phy, val_y_phy, test_x_phy, test_y_phy, train_mean_phy, train_std_phy = traindata_reservoir(args)
     train_x_lstm, train_y_lstm, val_x_lstm, val_y_lstm, test_x_lstm, test_y_lstm, train_max_lstm, train_min_lstm = traindata_watershed(args)
+    # Load reservoir storage and water level relation
+    ZV=pd.read_excel(args.datapath+'reservoir/ZV relation.xls',sheet_name='安康ZV')
+    p_s=np.polyfit(ZV['level'],ZV['s1']*10**8/35200/10**3,2)
+    p_s=torch.FloatTensor(p_s)
     
     # Set up CUDA if available
     device = torch.device(f'cuda:{args.cuda_device}') if args.cuda else torch.device('cpu')
     
     # Run the training process for specified number of evaluations
-    for i in range(args.tot_evals):
-        print("-"*10, f"Experiment {i+1}/{args.tot_evals}", "-"*10)
-        
-        # Initialize model
-        model = DL_Res_LSTM(
-            args.input_channels, args.hidden_channels, args.output_channels, args.dropout,
-            args.delay, args.input_size, args.hidden_size, args.warmup_updates, args.tot_updates,
-            args.peak_lr, args.end_lr, args.power, args.weight_decay,
-            args.jit, train_max_lstm, train_min_lstm
-        )
-        
-        # Configure optimizer and learning rate scheduler
-        optimizer, lr_scheduler = model.configure_optimizers()
-        model = model.to(device=device)
-        
-        # Print model information
-        num_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        print('*'*60)
-        print(f'{args.exp} model {i+1} has {num_parameters} learnable parameters')
-        print('*'*60)
-        
-        # Train the model
-        exit_flag = run_exp(
-            args, args.tot_updates, model, optimizer, lr_scheduler,
-            train_x_phy, train_y_phy, val_x_phy, val_y_phy, test_x_phy, test_y_phy,
-            train_x_lstm, train_y_lstm, val_x_lstm, val_y_lstm, test_x_lstm, test_y_lstm,
-            device, args.exp, i
-        )
-        
-        # Check for training termination
-        if exit_flag == 0:
-            print('Iteration terminated due to NaN')
-        else:
-            print('Iteration terminated with no error')
+    print("-"*10, f"Experiment {args.repeat+1}", "-"*10)
+    
+    # Initialize model
+    model = P_LSTM_INT(
+        args.input_channels, args.hidden_channels, args.output_channels, args.dropout,
+        args.delay, args.input_size, args.hidden_size, args.warmup_updates, args.tot_updates,
+        args.peak_lr, args.end_lr, args.power, args.weight_decay,
+        args.jit, train_max_lstm, train_min_lstm,p_s
+    )
+    
+    # Configure optimizer and learning rate scheduler
+    optimizer, lr_scheduler = model.configure_optimizers()
+    model = model.to(device=device)
+    
+    # Print model information
+    num_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print('*'*60)
+    print(f'{args.exp} model {args.repeat+1} has {num_parameters} learnable parameters')
+    print('*'*60)
+    
+    # Train the model
+    exit_flag = run_exp(
+        args, args.tot_updates, model, optimizer, lr_scheduler,
+        train_x_phy, train_y_phy, val_x_phy, val_y_phy, test_x_phy, test_y_phy,
+        train_x_lstm, train_y_lstm, val_x_lstm, val_y_lstm, test_x_lstm, test_y_lstm,
+        device, args.exp, args.repeat
+    )
+    
+    # Check for training termination
+    if exit_flag == 0:
+        print('Iteration terminated due to NaN')
+    else:
+        print('Iteration terminated with no error')
 
 if __name__ == "__main__":
     main()

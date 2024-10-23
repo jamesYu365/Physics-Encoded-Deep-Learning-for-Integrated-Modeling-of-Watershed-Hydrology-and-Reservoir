@@ -2,6 +2,7 @@
 
 # Import necessary libraries
 import pandas as pd
+import numpy as np
 import torch.nn.functional as F
 from matplotlib import pyplot as plt
 import matplotlib as mpl
@@ -91,7 +92,7 @@ def plot_result(args, model, path_t, plot=True):
     train_x_lstm, _, val_x_lstm, _, test_x_lstm, _, train_max_lstm, train_min_lstm = traindata_watershed(args)
     
     # Load reservoir data
-    reser = pd.read_csv(args.datapath + 'processed_ankang_inflow_release_meteo_1991_2014.csv', index_col=0)
+    reser = pd.read_csv(args.datapath + '/reservoir/ankang_operation.csv', index_col=0)
     reser.index = pd.to_datetime(reser.index)
 
     # Set model to evaluation mode
@@ -99,9 +100,9 @@ def plot_result(args, model, path_t, plot=True):
     model.eval()
     
     # Generate predictions for each dataset
-    train_output_lstm, train_output_phy, train_s2 = model(train_x_lstm, train_x_phy)
-    val_output_lstm, val_output_phy, val_s2 = model(val_x_lstm, val_x_phy)
-    test_output_lstm, test_output_phy, test_s2 = model(test_x_lstm, test_x_phy)
+    train_output_lstm, train_output_phy, train_analyze = model(train_x_lstm, train_x_phy)
+    val_output_lstm, val_output_phy, val_analyze = model(val_x_lstm, val_x_phy)
+    test_output_lstm, test_output_phy, test_analyze = model(test_x_lstm, test_x_phy)
     
     # Process model outputs
     train_output_lstm = (F.relu(train_output_lstm) * (train_max_lstm[-1] - train_min_lstm[-1]) + train_min_lstm[-1]).cpu().detach().numpy()
@@ -112,14 +113,14 @@ def plot_result(args, model, path_t, plot=True):
     val_output_phy = val_output_phy.cpu().detach().numpy()
     test_output_phy = test_output_phy.cpu().detach().numpy()
     
-    train_s2 = train_s2.cpu().detach().numpy()
-    val_s2 = val_s2.cpu().detach().numpy()
-    test_s2 = test_s2.cpu().detach().numpy()
+    train_analyze = train_analyze.cpu().detach().numpy()
+    val_analyze = val_analyze.cpu().detach().numpy()
+    test_analyze = test_analyze.cpu().detach().numpy()
 
     # Prepare evaluation datasets
-    eval_training = prepare_eval_data(train_set, reser, train_output_lstm, train_output_phy, train_s2, model)
-    eval_validating = prepare_eval_data(val_set, reser, val_output_lstm, val_output_phy, val_s2, model)
-    eval_testing = prepare_eval_data(test_set, reser, test_output_lstm, test_output_phy, test_s2, model)
+    eval_training = prepare_eval_data(train_set, reser, train_output_lstm, train_output_phy, train_analyze, model)
+    eval_validating = prepare_eval_data(val_set, reser, val_output_lstm, val_output_phy, val_analyze, model)
+    eval_testing = prepare_eval_data(test_set, reser, test_output_lstm, test_output_phy, test_analyze, model)
     
     # Generate plots if required
     if plot:
@@ -129,7 +130,7 @@ def plot_result(args, model, path_t, plot=True):
     
     return (eval_training,), (eval_validating,), (eval_testing,)
 
-def prepare_eval_data(data_set, reser, output_lstm, output_phy, s2, model):
+def prepare_eval_data(data_set, reser, output_lstm, output_phy, analyze, model):
     """
     Prepare evaluation data for a given dataset.
     
@@ -145,10 +146,15 @@ def prepare_eval_data(data_set, reser, output_lstm, output_phy, s2, model):
         pandas.DataFrame: Prepared evaluation data
     """
     eval_data = data_set.copy()
-    eval_data['storage_obs'] = reser['storage'] / 25.85
+    eval_data['storage_obs'] = reser['storage'] / model.reservoir.reser_maxstgNF.numpy()
     eval_data['inflow_obs'] = eval_data['inflow'] * 35200 * 1000 / 86400
     eval_data['release_obs'] = eval_data['release'] * 35200 * 1000 / 86400
     eval_data['inflow_pred'] = output_lstm[:, 0] * 35200 * 1000 / 86400
     eval_data['release_pred'] = output_phy[0, :, :] * 35200 * 1000 / 86400
-    eval_data['s2'] = s2[0, :, 0] / model.reservoir.reser_maxstgNF
+    eval_data['storage_pred'] = analyze[0, :, 0] / model.reservoir.reser_maxstgNF
+    eval_data['res_prcp_pred'] = analyze[0, :, 1] * 35200 * 1000
+    eval_data['res_eva_pred'] = analyze[0, :, 2] * 35200 * 1000
+    eval_data['res_vertical_pred']=np.cumsum(eval_data['res_prcp_pred']-eval_data['res_eva_pred'])
     return eval_data.iloc[365:, :]
+
+

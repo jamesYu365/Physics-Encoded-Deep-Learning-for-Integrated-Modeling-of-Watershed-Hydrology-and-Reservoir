@@ -7,7 +7,7 @@ from layers import Watershed_LSTM_Layer, Reservoir_LSTM_Layer_Jit, PolynomialDec
 
 class Base_Model(nn.Module):
     '''
-    Base model which provides a template for all DL-Res models.
+    Base model which provides a template for all P-LSTM_INT models.
     This class sets up common parameters and the optimizer configuration.
     '''
     def __init__(self, warmup_updates, tot_updates, peak_lr, end_lr, power, weight_decay):
@@ -21,7 +21,7 @@ class Base_Model(nn.Module):
     
     def configure_optimizers(self):
         '''
-        Configures optimizers for the DL-Res model:
+        Configures optimizers for the P-LSTM_INT model:
         1. optimizer_inflow: For training Watershed LSTM with constant learning rate
         2. optimizer_all: For training both Watershed and Reservoir LSTMs with polynomial scheduled learning rate
         
@@ -31,7 +31,7 @@ class Base_Model(nn.Module):
         # Optimizer for Watershed LSTM
         optimizer_inflow = torch.optim.Adam(
             filter(lambda p: p.requires_grad, self.watershed.parameters()),
-            lr=5e-3,
+            lr=1e-2,
             weight_decay=self.weight_decay
         )
         
@@ -54,17 +54,17 @@ class Base_Model(nn.Module):
 
         return (optimizer_inflow, optimizer_all), (1, scheduler_all)
 
-class DL_Res_LSTM(Base_Model):
+class P_LSTM_INT(Base_Model):
     '''
-    DL-Res model:
+    P-LSTM_INT model:
     Consists of two main components:
     1. Watershed LSTM: Predicts inflow
     2. Reservoir LSTM: Takes predicted inflow and other inputs to make release predictions
     '''
     def __init__(self, input_channels, hidden_channels, output_channels, dropout, delay,
                  input_size, hidden_size, warmup_updates, tot_updates, peak_lr, end_lr, power, weight_decay,
-                 jit, train_max_lstm, train_min_lstm):
-        super(DL_Res_LSTM, self).__init__(warmup_updates, tot_updates, peak_lr, end_lr, power, weight_decay)
+                 jit, train_max_lstm, train_min_lstm,p_s):
+        super(P_LSTM_INT, self).__init__(warmup_updates, tot_updates, peak_lr, end_lr, power, weight_decay)
         
         # Register buffers for normalization
         self.register_buffer('train_max_lstm', train_max_lstm)
@@ -72,11 +72,11 @@ class DL_Res_LSTM(Base_Model):
 
         # Initialize Watershed and Reservoir LSTM layers
         self.watershed = Watershed_LSTM_Layer(input_channels, hidden_channels, output_channels, dropout)
-        self.reservoir = Reservoir_LSTM_Layer_Jit(input_size, hidden_size, dropout)
+        self.reservoir = Reservoir_LSTM_Layer_Jit(input_size, hidden_size, dropout,p_s)
 
     def forward(self, inputs_lstm, inputs_phy_p):
         """
-        Forward pass of the DL-Res LSTM model.
+        Forward pass of the P-LSTM_INT model.
         
         Args:
             inputs_lstm (torch.Tensor): Input for Watershed LSTM, shape [Batch_size * Time_len, Feature]

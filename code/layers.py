@@ -74,8 +74,9 @@ class Reservoir_LSTM_Layer_Jit(jit.ScriptModule):
         reser_minre: reservoir minimum release (mm)
         reser_maxre: reservoir maximum release (mm)
         reser_normflow: value to normalize reservoir inflow and outflow (about 90% quantile of inflow) (mm)
+        p_s: coefficients for the quadratic equation fitted to storage-height curve
     """
-    def __init__(self, input_size, hidden_size, dropout):
+    def __init__(self, input_size, hidden_size, dropout,p_s):
         super(Reservoir_LSTM_Layer_Jit, self).__init__()
         self.hidden_size = hidden_size
         
@@ -85,7 +86,7 @@ class Reservoir_LSTM_Layer_Jit(jit.ScriptModule):
         self.dropout = nn.Dropout(p=dropout)
 
         self._initialize_parameters()
-        self._initialize_reservoir_properties()
+        self._initialize_reservoir_properties(p_s)
 
     def _initialize_parameters(self):
         # Initialize LSTM cell
@@ -102,7 +103,7 @@ class Reservoir_LSTM_Layer_Jit(jit.ScriptModule):
             else:
                 nn.init.zeros_(p)
 
-    def _initialize_reservoir_properties(self):
+    def _initialize_reservoir_properties(self,p_s):
         # Define reservoir properties encoded in the reservoir LSTM layer
         self.register_buffer('reser_minstg', torch.tensor(9.1*10**8/35200/10**3))
         self.register_buffer('reser_maxstgF', torch.tensor(22.25*10**8/35200/10**3))
@@ -112,6 +113,7 @@ class Reservoir_LSTM_Layer_Jit(jit.ScriptModule):
         self.register_buffer('reser_minre', torch.tensor(0*3600*24/35200/10**3))
         self.register_buffer('reser_maxre', torch.tensor(20000*3600*24/35200/10**3))
         self.register_buffer('reser_normflow', torch.tensor(4000*3600*24/35200/10**3))
+        self.register_buffer('p_s',p_s)
     
     def heaviside(self, x):
         """
@@ -159,9 +161,11 @@ class Reservoir_LSTM_Layer_Jit(jit.ScriptModule):
         t=inputs[:,1:2]
         doy=inputs[:,2:3]
         cosdoy=inputs[:,3:4]
-        inflow_pred=inputs[:,4:5]
-        inflow_pf=inputs[:,5:7]
-        s2=states[:,0:1]
+        p_res=inputs[:,4:5]
+        res_eva_rate=inputs[:,5:6]
+        inflow_pred=inputs[:,6:7]
+        inflow_pf=inputs[:,7:9]
+        s2=states[:,1:2]
 
         # Make release prediction
         new_re, new_hidden = self.reservoir_bucket(s2, inflow_pred, inflow_pf, p, t, cosdoy, hidden_state)
@@ -172,6 +176,10 @@ class Reservoir_LSTM_Layer_Jit(jit.ScriptModule):
                        self.heaviside(self.flood_eday - doy) * self.heaviside(doy - self.flood_sday) * self.reser_maxstgF
         
         # Perform water balance calculation
+        area=torch.sqrt(self.p_s[1]**2-4*self.p_s[0]*(self.p_s[2]-s2))
+        res_prcp=area*p_res/1e3
+        res_eva=area*res_eva_rate/1e3
+        new_s2=s2-new_re+inflow_pred+res_prcp-res_eva
         new_s2 = s2 - new_re + inflow_pred
         
         # Check the storage range
@@ -180,10 +188,10 @@ class Reservoir_LSTM_Layer_Jit(jit.ScriptModule):
                     self.heaviside(reser_maxstg - new_s2) * self.heaviside(new_s2 - self.reser_minstg) * new_s2
         
         # Check the water balance again 
-        release = s2 + inflow_pred - cstred_s2
+        release = s2 + inflow_pred - cstred_s2+res_prcp-res_eva
         
         # Collect release and storage
-        new_state = torch.cat([cstred_s2, release], dim=1)
+        new_state = torch.cat([release,cstred_s2,res_prcp,res_eva], dim=1)
         return new_state, new_hidden
     
     @jit.script_method
@@ -200,7 +208,7 @@ class Reservoir_LSTM_Layer_Jit(jit.ScriptModule):
         """
         new_inputs = inputs.unbind(1)
         
-        init_states = torch.ones((inputs.shape[0], 2), device=inputs.device) * 20
+        init_states = torch.ones((inputs.shape[0], 4), device=inputs.device) * 20
         hidden_state = torch.zeros((2, inputs.shape[0], self.hidden_size), device=inputs.device)
         temp_states = init_states
         all_states = torch.jit.annotate(List[Tensor], [])
@@ -211,10 +219,10 @@ class Reservoir_LSTM_Layer_Jit(jit.ScriptModule):
         
         all_states = torch.stack(all_states, dim=1)
         
-        s2 = all_states[:, :, 0:1]
-        all_release = all_states[:, :, 1:2]
+        all_release=all_states[:,:,0:1]
+        analyze=all_states[:,:,1:]
 
-        return all_release, s2
+        return all_release,analyze
 
 class PolynomialDecayLR(_LRScheduler):
     """
