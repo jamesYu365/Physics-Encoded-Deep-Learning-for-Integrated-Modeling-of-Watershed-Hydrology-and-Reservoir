@@ -53,5 +53,6 @@ To prepare the data sets for this study, follow these steps:
 
 ## 5. Other information
 
-- **References**: References to related papers will be added later.
+- **References**: Yu, B., Zheng, Y., He, S., Xiong, R., & Wang, C. (2025). Physics-encoded deep learning for integrated modeling of watershed hydrology and reservoir operations. Journal of Hydrology, 657, 133052. https://doi.org/10.1016/j.jhydrol.2025.133052
+
 
